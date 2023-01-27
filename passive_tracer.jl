@@ -148,49 +148,6 @@ function calcN!(N, sol, t, clock, vars, params::AbstractTracerParams, grid)
     return nothing
 end
 
-# function calcN!(N, sol, t, clock, vars, params, grid)
-#     dealias!(sol, grid)
-    
-#     calcN_advection!(N, sol, t, clock, vars, params, grid)
-    
-#     addforcing!(N, sol, t, clock, vars, params, grid)
-    
-#     return nothing
-#   end
-
-# function calcN_advection!(N, sol, t, clock, vars, params, grid)
-#     @. vars.uh =   im * grid.l  * grid.invKrsq * sol
-#     @. vars.vh = - im * grid.kr * grid.invKrsq * sol
-#     @. vars.ζh = sol
-  
-#     ldiv!(vars.u, grid.rfftplan, vars.uh)
-#     ldiv!(vars.v, grid.rfftplan, vars.vh)
-#     ldiv!(vars.ζ, grid.rfftplan, vars.ζh)
-    
-#     uζ = vars.u                  # use vars.u as scratch variable
-#     @. uζ *= vars.ζ              # u*ζ
-#     vζ = vars.v                  # use vars.v as scratch variable
-#     @. vζ *= vars.ζ              # v*ζ
-    
-#     uζh = vars.uh                # use vars.uh as scratch variable
-#     mul!(uζh, grid.rfftplan, uζ) # \hat{u*ζ}
-#     vζh = vars.vh                # use vars.vh as scratch variable
-#     mul!(vζh, grid.rfftplan, vζ) # \hat{v*ζ}
-  
-#     @. N = - im * grid.kr * uζh - im * grid.l * vζh
-    
-#     return nothing
-#   end
-
-
-#   function addforcing!(N, sol, t, clock, vars::ForcedVars, params, grid)
-#     params.calcF!(vars.Fh, sol, t, clock, vars, params, grid)
-    
-#     @. N += vars.Fh
-    
-#     return nothing
-#   end
-
 """
     updatevars!(params::AbstractTracerParams, vars, grid, sol)
 
