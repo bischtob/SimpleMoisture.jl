@@ -17,22 +17,22 @@ end
 random_uniform = dev == CPU() ? rand : CUDA.rand
 
 ### Numerical, domain, and simulation parameters
-n = 512                           # number of grid points
+n = 256                           # number of grid points
 L = 2π                            # domain size       
 stepper = "ETDRK4"                # timestepper
-ν, nν = 1e-14, 4                  # hyperviscosity coefficient and hyperviscosity order, 64: 1e-10;, 128: 1e-12, 256: 1e-14, 512: 1e-14, 1024: 1e-16
+ν, nν = 1e-14, 4                  # hyperviscosity coefficient and hyperviscosity order, 256: 1e-14
 νc, nνc = ν, nν                   # hyperviscosity coefficient and hyperviscosity order for tracer
 μ, nμ = 1e-2, 0                   # linear drag coefficient
-dt = 0.0025                       # timestep
-nsteps = 80000                    # total number of steps
+dt = 1e-3                         # timestep
+nsteps = 10000                    # total number of steps
 nsubs = 40                        # number of steps between each plot
 forcing_wavenumber = 4.0 * 2π / L # the forcing wavenumber, `k_f`, for a spectrum that is a ring in wavenumber space
-forcing_bandwidth = 1.5 * 2π / L  # the width of the forcing spectrum, `δ_f`
+forcing_bandwidth = 2.0 * 2π / L  # the width of the forcing spectrum, `δ_f`
 ε = 0.1                           # energy input rate by the forcing
-γ₀ = 8.0                          # saturation specific humidity gradient
-e = 1.0                           # evaporation rate           
-τc = 0.5                          # condensation time scale
-small_scale_amp = 1.0             # amplitude of small-scale forcing
+γ₀ = 1.0                          # saturation specific humidity gradient
+e = 0.1                           # evaporation rate           
+τc = .5e-1                         # condensation time scale
+small_scale_amp = 0.0             # amplitude of small-scale forcing
 small_scale_wn = 4                # wavenumber of small-scale forcing
 
 ### Grid
@@ -67,24 +67,24 @@ end
 function warp_sine(grid)
   k = small_scale_wn
   xx, yy = ones(n) * grid.x', grid.y * ones(n)'
-  γx = @. γ₀ * (small_scale_amp * cos(2π * k * xx / L) * sin(2π * k * yy / L) + 0)
+  γx = @. γ₀ * (small_scale_amp * cos(2π * k * xx / L) * sin(2π * k * yy / L) + 1)
   γy = @. γ₀ * (small_scale_amp * sin(2π * k * xx / L) * cos(2π * k * yy / L) + cos(2π * yy / L) / 4)
   return device_array(dev)(γx), device_array(dev)(γy)
 end
 
-γx, γy = warp_sine(grid)
+γx, γy = warp_none(grid)
 
 ### Problem setup
 NSprob = TwoDNavierStokes.Problem(dev; nx=n, Lx=L, ν, nν, μ, nμ, dt, stepper=stepper, calcF=calcF!, stochastic=true)
 TwoDNavierStokes.set_ζ!(NSprob, device_array(dev)(zeros(grid.nx, grid.ny)))
-ADprob = TracerAdvection.Problem(NSprob; νc=νc, nνc=nνc, e=e, τc=τc, γy=γy, stepper)
+ADprob = TracerAdvection.Problem(NSprob; νc=νc, nνc=nνc, e=e, τc=τc, γx=γx, γy=γy, stepper)
 
 # Some shortcuts for the advection-diffusion problem:
 sol, clock, vars, params, grid = ADprob.sol, ADprob.clock, ADprob.vars, ADprob.params, ADprob.grid
 x, y = grid.x, grid.y
 
 # Set tracer initial conditions
-profile(x, y, σ) = 1
+profile(x, y, σ) = 0
 amplitude, spread = 1.0, 0.3
 c₀ = device_array(dev)([amplitude * profile(x[i], y[j], spread) for j = 1:grid.ny, i = 1:grid.nx])
 TracerAdvection.set_c!(ADprob, c₀)
@@ -95,7 +95,7 @@ Z = Diagnostic(TwoDNavierStokes.enstrophy, params.base_prob; nsteps) # enstrophy
 diags = [E, Z] # a list of Diagnostics passed to `stepforward!` will  be updated every timestep.
 
 # Makie
-c⁻ = Observable(Array(-vars.c))
+c⁻ = Observable(Array(vars.c))
 ζ = Observable(Array(params.base_prob.vars.ζ))
 title_ζ = Observable("vorticity, μ t=" * @sprintf("%.2f", μ * clock.t))
 energy = Observable(Point2f[(μ * E.t[1], E.data[1])])
@@ -110,13 +110,13 @@ axζ = Axis(fig[1, 1];
 axc = Axis(fig[1, 2];
   xlabel="x",
   ylabel="y",
-  title="tracer concentration",
+  title="saturation deficit",
   aspect=1,
   limits=((-L / 2, L / 2), (-L / 2, L / 2)))
 heatmap!(axζ, x, y, ζ;
   colormap=:balance, colorrange=(-40, 40))
 heatmap!(axc, x, y, c⁻;
-  colormap=:balance, colorrange=(0, 5))
+  colormap=:balance, colorrange=(-5, 5))
 
 # Solution!
 startwalltime = time()
@@ -133,7 +133,7 @@ CairoMakie.record(fig, "twodturb_forced.mp4", frames, framerate=25) do j
   end
 
   # Diags
-  c⁻[] = -vars.c
+  c⁻[] = vars.c
   ζ[] = params.base_prob.vars.ζ
   energy[] = push!(energy[], Point2f(μ * E.t[E.i], E.data[E.i]))
   enstrophy[] = push!(enstrophy[], Point2f(μ * Z.t[E.i], Z.data[Z.i] / forcing_wavenumber^2))
