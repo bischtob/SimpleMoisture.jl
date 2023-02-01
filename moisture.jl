@@ -6,7 +6,7 @@ include("passive_tracer.jl")
 using GeophysicalFlows, CUDA, Random, Printf, CairoMakie
 
 ### Device
-dev = CPU()
+dev = GPU()
 
 ### RNG
 if dev == CPU()
@@ -17,21 +17,21 @@ end
 random_uniform = dev == CPU() ? rand : CUDA.rand
 
 ### Numerical, domain, and simulation parameters
-n = 256                           # number of grid points
+n = 512                           # number of grid points
 L = 2π                            # domain size       
 stepper = "ETDRK4"                # timestepper
-ν, nν = 1e-14, 4                  # hyperviscosity coefficient and hyperviscosity order, 256: 1e-14
+ν, nν = 1e-16, 4                  # hyperviscosity coefficient and hyperviscosity order, 512: 1e-16; 256: 1e-14; 128: 1e-14: 64: 1e-8; 32: 1e-6
 νc, nνc = ν, nν                   # hyperviscosity coefficient and hyperviscosity order for tracer
 μ, nμ = 1e-2, 0                   # linear drag coefficient
 dt = 1e-3                         # timestep
-nsteps = 10000                    # total number of steps
+nsteps = 100000                   # total number of steps
 nsubs = 40                        # number of steps between each plot
 forcing_wavenumber = 4.0 * 2π / L # the forcing wavenumber, `k_f`, for a spectrum that is a ring in wavenumber space
 forcing_bandwidth = 2.0 * 2π / L  # the width of the forcing spectrum, `δ_f`
 ε = 0.1                           # energy input rate by the forcing
 γ₀ = 1.0                          # saturation specific humidity gradient
-e = 0.1                           # evaporation rate           
-τc = .5e-1                         # condensation time scale
+e = 0.5                           # evaporation rate           
+τc = 1e-2                         # condensation time scale
 small_scale_amp = 0.0             # amplitude of small-scale forcing
 small_scale_wn = 4                # wavenumber of small-scale forcing
 
