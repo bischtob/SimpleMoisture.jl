@@ -3,37 +3,45 @@
 # the form of linear drag and hyperviscosity.
 include("passive_tracer.jl")
 
-using GeophysicalFlows, CUDA, Random, Printf, CairoMakie
+using CairoMakie
+using CUDA
+using GeophysicalFlows
+using HDF5
+using Printf
+using Random 
 
 ### Device
 dev = GPU()
 
 ### RNG
+id = 12
 if dev == CPU()
-  Random.seed!(1234)
+  Random.seed!(id)
 else
-  CUDA.seed!(1234)
+  CUDA.seed!(id)
 end
 random_uniform = dev == CPU() ? rand : CUDA.rand
 
 ### Numerical, domain, and simulation parameters
-n = 512                           # number of grid points
+n = 64                            # number of grid points
 L = 2π                            # domain size       
-stepper = "ETDRK4"                # timestepper
-ν, nν = 1e-16, 4                  # hyperviscosity coefficient and hyperviscosity order, 512: 1e-16; 256: 1e-14; 128: 1e-14: 64: 1e-8; 32: 1e-6
+stepper = "FilteredRK4"           # timestepper
+ν, nν = 1e-8, 4                  # hyperviscosity coefficient and hyperviscosity order, 512: 1e-16; 256: 1e-14; 128: 1e-12: 64: 1e-8; 32: 1e-6
 νc, nνc = ν, nν                   # hyperviscosity coefficient and hyperviscosity order for tracer
 μ, nμ = 1e-2, 0                   # linear drag coefficient
 dt = 1e-3                         # timestep
-nsteps = 100000                   # total number of steps
-nsubs = 40                        # number of steps between each plot
-forcing_wavenumber = 4.0 * 2π / L # the forcing wavenumber, `k_f`, for a spectrum that is a ring in wavenumber space
+nsteps = 500000                   # total number of steps
+nsubs = 250                       # number of steps between each plot
+forcing_wavenumber = 3.0 * 2π / L # the forcing wavenumber, `k_f`, for a spectrum that is a ring in wavenumber space
 forcing_bandwidth = 2.0 * 2π / L  # the width of the forcing spectrum, `δ_f`
 ε = 0.1                           # energy input rate by the forcing
 γ₀ = 1.0                          # saturation specific humidity gradient
-e = 0.5                           # evaporation rate           
+e = 1.0                           # evaporation rate           
 τc = 1e-2                         # condensation time scale
-small_scale_amp = 0.0             # amplitude of small-scale forcing
-small_scale_wn = 4                # wavenumber of small-scale forcing
+small_scale_amp = 0               # amplitude of small-scale forcing; use 
+small_scale_wn = 1.0
+#small_scale_wn = 1.0 * 2π / L     # wavenumber of small-scale forcing; use 4
+small_scale_wdth = 1.0 * 2π / L   # bandwidth of small-scale forcing; use 1.5
 
 ### Grid
 grid = TwoDGrid(dev; nx=n, Lx=L)
@@ -45,7 +53,7 @@ grid = TwoDGrid(dev; nx=n, Lx=L)
 # ``δ_f`` (`forcing_bandwidth`), and it injects energy per unit area and per unit time 
 # equal to ``\varepsilon``. That is, the forcing covariance spectrum is proportional to 
 # ``\exp{[-(|\bm{k}| - k_f)^2 / (2 δ_f^2)]}``.
-K = @. sqrt(grid.Krsq)             # a 2D array with the total wavenumber
+K = @. sqrt(grid.Krsq)               # a 2D array with the total wavenumber
 forcing_spectrum = @. exp(-(K - forcing_wavenumber)^2 / (2 * forcing_bandwidth^2))
 CUDA.@allowscalar forcing_spectrum[grid.Krsq.==0] .= 0 # ensure forcing has zero domain-average
 ε0 = FourierFlows.parsevalsum(forcing_spectrum .* grid.invKrsq / 2, grid) / (grid.Lx * grid.Ly)
@@ -57,6 +65,23 @@ function calcF!(Fh, sol, t, clock, vars, params, grid)
   return nothing
 end
 
+### Warping of saturation specific humidity gradient
+arr_K = Array(K)
+arr_invKrsq = Array(grid.invKrsq)
+spectrum = @. exp(-(arr_K - small_scale_wn)^2 / (2 * small_scale_wdth^2))
+CUDA.@allowscalar spectrum[grid.Krsq.==0] .= 0 # ensure zero domain-average
+
+# Random warping of background saturation specific humidity field
+arr_k = ones(n,1) * Array(grid.k)'
+arr_l = Array(grid.l)' * ones(1,n)
+warp = sqrt.(spectrum) .* exp.(2π .* im .* rand.(eltype(grid)))
+warp = Array(irfft(warp, grid.nx))
+warpx = real(ifft(im .* arr_k .* fft(warp)))
+warpy = real(ifft(im .* arr_l .* fft(warp)))
+warpx .*= small_scale_amp / maximum(warp)
+warpy .*= small_scale_amp / maximum(warp)
+warp .*= small_scale_amp / maximum(warp)
+
 ### Saturation specific humidity gradients
 function warp_none(grid)
   γx = device_array(dev)(zeros(grid.nx, grid.ny))
@@ -67,14 +92,32 @@ end
 function warp_sine(grid)
   k = small_scale_wn
   xx, yy = ones(n) * grid.x', grid.y * ones(n)'
-  γx = @. γ₀ * (small_scale_amp * cos(2π * k * xx / L) * sin(2π * k * yy / L) + 1)
-  γy = @. γ₀ * (small_scale_amp * sin(2π * k * xx / L) * cos(2π * k * yy / L) + cos(2π * yy / L) / 4)
+  warp = sin(2π * k * xx / L) * sin(2π * k * yy / L) + γ₀ * yy
+  γx = @. small_scale_amp * cos(2π * k * xx / L) * sin(2π * k * yy / L) * 2π * k / L
+  γy = @. γ₀ + small_scale_amp * sin(2π * k * xx / L) * cos(2π * k * yy / L) * 2π * k / L
   return device_array(dev)(γx), device_array(dev)(γy)
 end
 
-γx, γy = warp_none(grid)
+function warp_random(grid)
+  γx = @. warpx
+  γy = @. γ₀ + warpy
+  return device_array(dev)(γx), device_array(dev)(γy)
+end
+
+function warp_ridge(grid)
+  v = 0.1*2π
+  xx = ones(n)*grid.x'
+  yy = grid.y*ones(1,n)
+  #mtn = @. small_scale_amp * exp(-xx^2/v)
+  mtn = @. small_scale_amp * exp(-yy^2/v)
+  warp = @. mtn + γ₀ * yy
+  γx = @. -xx/v * mtn
+  γy = @. γ₀ * ones(grid.nx, grid.ny)
+  return device_array(dev)(γx), device_array(dev)(γy)
+end
 
 ### Problem setup
+γx, γy = warp_sine(grid)
 NSprob = TwoDNavierStokes.Problem(dev; nx=n, Lx=L, ν, nν, μ, nμ, dt, stepper=stepper, calcF=calcF!, stochastic=true)
 TwoDNavierStokes.set_ζ!(NSprob, device_array(dev)(zeros(grid.nx, grid.ny)))
 ADprob = TracerAdvection.Problem(NSprob; νc=νc, nνc=nνc, e=e, τc=τc, γx=γx, γy=γy, stepper)
@@ -120,8 +163,11 @@ heatmap!(axc, x, y, c⁻;
 
 # Solution!
 startwalltime = time()
-
 frames = 0:round(Int, nsteps / nsubs)
+
+# Storage array
+data_for_storage = zeros(Float32, n, n, 2, length(frames))
+
 CairoMakie.record(fig, "twodturb_forced.mp4", frames, framerate=25) do j
   # terminal update
   if j % (1000 / nsubs) == 0
@@ -131,6 +177,11 @@ CairoMakie.record(fig, "twodturb_forced.mp4", frames, framerate=25) do j
       clock.step, clock.t, cfl, E.data[E.i], Z.data[Z.i], (time() - startwalltime) / 60)
     println(log)
   end
+
+  # Store data
+  #if j % nsubs == 0
+    data_for_storage[:, :, :, j+1] = cat(Float32.(Array(vars.c))[:, :, :], Float32.(Array(params.base_prob.vars.ζ))[:, :, :], dims=3)
+  #end
 
   # Diags
   c⁻[] = vars.c
@@ -145,3 +196,12 @@ CairoMakie.record(fig, "twodturb_forced.mp4", frames, framerate=25) do j
   stepforward!(params.base_prob, diags, nsubs)
   TwoDNavierStokes.updatevars!(params.base_prob)
 end
+
+# Store as HDF5
+fname = "2dturbulence_with_context.hdf5"
+fid = h5open(fname, "cw")
+create_group(fid, "$(n)x$(n)x2_wn$(small_scale_wn)")
+group = fid["$(n)x$(n)x2_wn$(small_scale_wn)"]
+group["fields", chunk=(n, n, 1, 1), shuffle=(), deflate=3] = data_for_storage
+group["label"] = small_scale_wn
+close(fid)

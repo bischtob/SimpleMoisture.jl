@@ -44,7 +44,7 @@ abstract type AbstractTracerParams <: AbstractParams end
 The parameters of a constant diffusivity problem with flow obtained from a
 `FourierFlows.Problem` problem.
 """
-struct MoistureModelParams{T,Aphys2D} <: AbstractTracerParams
+struct MoistureModelParams{T,A,Aphys2D} <: AbstractTracerParams
     "``x``-diffusivity coefficient"
     κ::T
     "``y``-diffusivity coefficient"
@@ -58,7 +58,7 @@ struct MoistureModelParams{T,Aphys2D} <: AbstractTracerParams
     "saturation specific humidity gradient in y direction"
     γy::Aphys2D
     "evaporation rate"
-    e::T
+    e::A
     "condentation time scale"
     τc::T
     "`FourierFlows.problem` to generate the advecting flow"
