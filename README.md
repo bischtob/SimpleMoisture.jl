@@ -1,6 +1,6 @@
 # SimpleMoisture.jl
 
-Repo that adds a simple idealized speciifc humidity tracer to FourierFlows.jl and
+We add a simple idealized speciifc humidity tracer to FourierFlows.jl and
 GeophysicalFlows.jl.
 
 Run via
