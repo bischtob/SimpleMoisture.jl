@@ -29,6 +29,7 @@ random_uniform = dev == CPU() ? rand : CUDA.rand
 # strongly non-Gaussian: τc = 0.01
 # medium: τc = 0.1
 # weakly: τc = 1.0
+τc = 0.01
 
 ### Numerical, domain, and simulation parameters
 n = 32                            # number of grid points
@@ -45,7 +46,7 @@ e = 1.0                           # evaporation rate
 τc = τc                           # condensation time scale
 dt = 0.5e-1                       # timestep
 dt_save = 10.0                    # when to store data
-tend = dt_save*10000              # end time
+tend = dt_save*30000              # end time
 nsteps = Int(tend ÷ dt)           # number of simulation steps
 nsubs = Int(dt_save ÷ dt)         # number of steps between saves
 c_init = τc * e                   # guess a good initial condition for the tracer to reduce spinup 
