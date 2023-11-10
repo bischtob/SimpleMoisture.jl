@@ -26,15 +26,15 @@ end
 random_uniform = dev == CPU() ? rand : CUDA.rand
 
 ### Parameters to drive things from Gaussian to Non-Gaussian
-# strongly non-Gaussian: τc = 3e-2
+# strongly non-Gaussian: τc = 0.01
 # medium: τc = 0.1
-# weakly: τc = 10.0
-τc = 3e-2
+# weakly: τc = 1.0
+τc = 0.01
 
 ### Numerical, domain, and simulation parameters
 n = 32                            # number of grid points
 L = 2π                            # domain size
-stepper = "FilteredRK4"           # timestepper
+stepper = "ETDRK4"                # timestepper
 ν, nν = 1e-6, 4                   # hyperviscosity coefficient and hyperviscosity order, 512: 1e-16; 256: 1e-14; 128: 1e-12: 64: 1e-8; 32: 1e-6
 νc, nνc = ν, nν                   # hyperviscosity coefficient and hyperviscosity order for tracer
 μ, nμ = 1e-2, 0                   # linear drag coefficient
@@ -44,9 +44,9 @@ forcing_bandwidth = 2.0 * 2π / L  # the width of the forcing spectrum, `δ_f`
 γ₀ = 1.0                          # saturation specific humidity gradient
 e = 1.0                           # evaporation rate           
 τc = τc                           # condensation time scale
-dt = 4e-3                         # timestep
+dt = 0.5e-1                       # timestep
 dt_save = 10.0                    # when to store data
-tend = dt_save*100                # end time
+tend = dt_save*30000              # end time
 nsteps = Int(tend ÷ dt)           # number of simulation steps
 nsubs = Int(dt_save ÷ dt)         # number of steps between saves
 c_init = τc * e                   # guess a good initial condition for the tracer to reduce spinup 
@@ -123,7 +123,7 @@ axc = Axis(fig[1, 2];
 CairoMakie.heatmap!(axζ, x, y, ζ;
   colormap=:balance, colorrange=(-40, 40))
 CairoMakie.heatmap!(axc, x, y, c⁻;
-  colormap=:balance, colorrange=(0, 5))
+  colormap=:balance, colorrange=(0, 20))
 
 # Solution!
 startwalltime = time()
@@ -148,21 +148,18 @@ CairoMakie.record(fig, "two_dimensional_turbulence_with_condensation.mp4", frame
   title_ζ[] = "vorticity, μ t=" * @sprintf("%.2f", μ * clock.t)
 
   # Step!
-  stepforward!(ADprob, nsubs)
-  TracerAdvection.updatevars!(ADprob)
-  stepforward!(params.base_prob, diags, nsubs)
-  TwoDNavierStokes.updatevars!(params.base_prob)
+  for _ in 1:nsubs
+    stepforward!(ADprob, 1)
+    TracerAdvection.updatevars!(ADprob)
+    stepforward!(params.base_prob, diags, 1)
+    TwoDNavierStokes.updatevars!(params.base_prob)
+  end
 end
 
-# Append to HDF5
-fname = "./two_dimensional_turbulence_with_condensation.hdf5"
-fid = h5open(fname, "cw")
-fid["$(n)_$(ν)_$(nν)_$(μ)_$(nμ)_$(ε)_$(γ₀)_$(e)_$(τc)_$(dt)_$(dt_save)"] = solution
-close(fid)
-
-# Autocorrelation time analysis
-# We'll look at the center row
+# Further analysis
 for ch in 1:2
+  # Autocorrelation time analysis
+  # We'll look at the center row  
   vals = zeros(size(solution)[end],n)
   for i in 1:size(solution)[end]
       vals[i,:] .= solution[n ÷ 2,:,ch,i]
@@ -170,6 +167,17 @@ for ch in 1:2
   lags = [0:100...]
   ac = StatsBase.autocor(vals, lags; demean = true)
   mean_ac = mean(ac, dims = 2)[:]
-  Plots.plot(lags*dt_save, mean(ac, dims = 2)[:], label = "", ylabel = "Autocorrelation Coeff", xlabel = "Lag (time)", xlim = [0,100])
+  Plots.plot(lags * dt_save, mean(ac, dims = 2)[:], label = "", ylabel = "Autocorrelation Coeff", xlabel = "Lag (time)", xlim = [0,100])
   Plots.savefig(string("ac_channel_$(ch)_","$(n)_$(ν)_$(nν)_$(μ)_$(nμ)_$(ε)_$(γ₀)_$(e)_$(τc)_$(dt)_$(dt_save)",".png"))
+
+  # Single pixel
+  p528 = [solution[n ÷ 2,n ÷ 2,ch, k] for k in 1:size(solution)[end]]
+  Plots.histogram(p528, label = "", ylabel = "Frequency", xlabel = "Value")
+  Plots.savefig(string("single_pixel_channel_$(ch)_","$(n)_$(ν)_$(nν)_$(μ)_$(nμ)_$(ε)_$(γ₀)_$(e)_$(τc)_$(dt)_$(dt_save)",".png"))  
 end
+
+# Append to HDF5
+fname = "./two_dimensional_turbulence_with_condensation.hdf5"
+fid = h5open(fname, "cw")
+fid["$(n)_$(ν)_$(nν)_$(μ)_$(nμ)_$(ε)_$(γ₀)_$(e)_$(τc)_$(dt)_$(dt_save)"] = solution
+close(fid)
